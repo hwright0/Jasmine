@@ -1,6 +1,7 @@
 /*
  * Adds genotype information to a merged VCF file based on the genotypes of the original variants
  */
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.PrintWriter;
@@ -83,7 +84,7 @@ public class AddGenotypes {
 		}
 				
 		// Now scan through merged VCF and combine FORMAT fields as needed, printing the updated file at the same time
-		Scanner input = new Scanner(new FileInputStream(new File(inputFile)));
+			Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(inputFile))));
 		PrintWriter out = new PrintWriter(new File(outputFile));
 		VcfHeader header = new VcfHeader();
 		boolean headerPrinted = false;
@@ -380,7 +381,7 @@ public class AddGenotypes {
 			variantFormats = new ArrayList<VariantFormatField>();
 			idToVariantIndex = new HashMap<String, Integer>();
 			header = new VcfHeader();
-			Scanner input = new Scanner(new FileInputStream(new File(fileName)));
+			Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fileName))));
 			boolean extractedSampleNames = false;
 			while(input.hasNext())
 			{

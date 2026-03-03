@@ -4,6 +4,7 @@
  * so some bookkeeping is required to scan through the files one at a time and update all merged variants at once
  */
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.PrintWriter;
@@ -47,7 +48,7 @@ public class VariantOutput {
 		for(String filename : filenames)
 		{
 			HashSet<String> ids = new HashSet<String>();
-			Scanner input = new Scanner(new FileInputStream(new File(filename)));
+			Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(filename))));
 			
 			// Iterate over the variants in that file
 			while(input.hasNext())

@@ -3,18 +3,23 @@
  * the entries into separate groups by graph ID
  */
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Scanner;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class VariantInput {
 	
 	// How many samples were merged to produce each input file
-	static HashMap<Integer, Integer> previouslyMergedSamples = new HashMap<Integer, Integer>();
+	// ConcurrentHashMap so that parallel file reading in readAllFiles is safe
+	static ConcurrentHashMap<Integer, Integer> previouslyMergedSamples = new ConcurrentHashMap<Integer, Integer>();
 	
 	/*
 	 * Count the number of VCF files in a list
@@ -31,14 +36,38 @@ public class VariantInput {
 	public static TreeMap<String, ArrayList<Variant>> readAllFiles(String fileList) throws Exception
 	{
 		ArrayList<String> fileNames = PipelineManager.getFilesFromList(fileList);
+		int numFiles = fileNames.size();
 		
-		TreeMap<String, ArrayList<Variant>>[] variantsPerFile = new TreeMap[fileNames.size()];
-		for(int i = 0; i<fileNames.size(); i++)
+		TreeMap<String, ArrayList<Variant>>[] variantsPerFile = new TreeMap[numFiles];
+		
+		// Read all input VCF files in parallel using the configured thread count.
+		// Each getSingleList call is independent (distinct sample index, no shared write state).
+		int threads = Math.max(1, Math.min(Settings.THREADS, numFiles));
+		ExecutorService pool = Executors.newFixedThreadPool(threads);
+		ArrayList<Future<?>> futures = new ArrayList<Future<?>>();
+		for(int i = 0; i < numFiles; i++)
 		{
-			variantsPerFile[i] = getSingleList(fileNames.get(i), i);
+			final int idx = i;
+			futures.add(pool.submit(() -> {
+				try
+				{
+					variantsPerFile[idx] = getSingleList(fileNames.get(idx), idx);
+				}
+				catch(Exception e)
+				{
+					throw new RuntimeException(e);
+				}
+			}));
 		}
+		pool.shutdown();
+		for(Future<?> f : futures)
+		{
+			f.get(); // re-throws ExecutionException wrapping any per-file error
+		}
+		
+		// Merge per-file maps into the combined result (single-threaded; order preserved)
 		TreeMap<String, ArrayList<Variant>> res = new TreeMap<String, ArrayList<Variant>>();
-		for(int i = 0; i<fileNames.size(); i++)
+		for(int i = 0; i < numFiles; i++)
 		{
 			for(String s : variantsPerFile[i].keySet())
 			{
@@ -46,10 +75,7 @@ public class VariantInput {
 				{
 					res.put(s, new ArrayList<Variant>());
 				}
-				for(Variant v : variantsPerFile[i].get(s))
-				{
-					res.get(s).add(v);
-				}
+				res.get(s).addAll(variantsPerFile[i].get(s));
 			}
 		}
 		return res;
@@ -64,7 +90,7 @@ public class VariantInput {
 		{
 			System.err.println("Warning: " + filename + " ends with .gz, but (b)gzipped VCFs are not accepted");
 		}
-		Scanner input = new Scanner(new FileInputStream(new File(filename)));
+		Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(filename))));
 		ArrayList<Variant> allVariants = new ArrayList<Variant>();
 		HashSet<String> ids = new HashSet<String>();
 		if(!previouslyMergedSamples.containsKey(sample))

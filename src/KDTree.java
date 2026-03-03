@@ -101,20 +101,28 @@ public class KDTree
 			int depthcur = depths.pollFirst();
 			int parentsidecur = parentsides.pollFirst();
 			
-			// Get pivot as the first point in the list
-			Node pivot = pcur.remove();
+			// Sort by the current split dimension and pick the median as pivot.
+			// This produces a balanced tree (O(log n) depth) instead of the
+			// degenerate O(n) depth that results from always picking the first
+			// element when variants are pre-sorted by position.
+			final int splitDim = depthcur % K;
+			ArrayList<Node> sortedNodes = new ArrayList<Node>(pcur);
+			sortedNodes.sort((x, y) -> Double.compare(x.planes[splitDim], y.planes[splitDim]));
+			int medianIdx = sortedNodes.size() / 2;
+			Node pivot = sortedNodes.get(medianIdx);
 			
-			// Separate this point into points left of the pivot vs. right of the pivot
+			// Partition directly from the sorted list: indices < median → left, > median → right
 			LinkedList<Node> left = new LinkedList<Node>();
 			LinkedList<Node> right = new LinkedList<Node>();
-			while (!pcur.isEmpty()) 
+			for(int si = 0; si < sortedNodes.size(); si++)
 			{
-				Node check = pcur.pollFirst();
-				if (check.planes[depthcur % K] < pivot.planes[depthcur % K])
-					left.add(check);
+				if(si == medianIdx) continue;
+				if(si < medianIdx)
+					left.add(sortedNodes.get(si));
 				else
-					right.add(check);
+					right.add(sortedNodes.get(si));
 			}
+			sortedNodes = null; // allow GC
 			
 			//pcur.clear();
 			
