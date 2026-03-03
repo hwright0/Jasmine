@@ -31,15 +31,19 @@ public class AddGenotypes {
 	/*
 	 * To add other FORMAT fields, add their details here and add the logic to initialize them in reformatVariantFormat
 	 */
-	static String[] newFieldNames = {"GT", "IS", "OT", "DV", "DR"};
-	static String[] newFieldNums = {"1", "1", "1", "1", "1"};
-	static String[] newFieldTypes = {"String", "String", "String", "String", "String"};
+	static String[] newFieldNames = {"GT", "IS", "OT", "DV", "DR", "SM", "CN", "BC", "PE"};
+	static String[] newFieldNums = {"1", "1", "1", "1", "1", "1", "1", "1", "2"};
+	static String[] newFieldTypes = {"String", "String", "String", "String", "String", "Float", "Integer", "Integer", "Integer"};
 	static String[] newFieldDescs = new String[] {
 			"The genotype of the variant",
 			"Whether or not the variant call was marked as specific due to high read support and length",
 			"The original type of the variant",
 			"The number of reads supporting the variant sequence",
-			"The number of reads supporting the reference sequence"
+			"The number of reads supporting the reference sequence",
+			"Linear copy ratio of the segment mean",
+			"Estimated copy number",
+			"Number of bins in the region",
+			"Number of improperly paired end reads at start and stop breakpoints"
 	};
 	
 	/*
@@ -214,7 +218,8 @@ public class AddGenotypes {
 					}
 					else
 					{
-						// Fill fields with "NA" but use "./." or "0|0" for genotype
+						// Fill fields with "NA" but use "./." or "0|0" for genotype,
+						// and ".,." for Number=2 fields (PE)
 						String val = "NA";
 						if(fieldName.equals("GT"))
 						{
@@ -226,6 +231,10 @@ public class AddGenotypes {
 							{
 								val = "./.";
 							}
+						}
+						else if(fieldName.equals("PE"))
+						{
+							val = ".,.";
 						}
 						res.sampleFieldValues[sampleIndex][res.getFieldIndex(fieldName)] = val;
 					}
@@ -321,6 +330,26 @@ public class AddGenotypes {
 					{
 						res.sampleFieldValues[j][i] = ".";
 					}
+				}
+				else if(field.equals("SM"))
+				{
+					String oldSm = oldVariant.getValue(j, "SM");
+					res.sampleFieldValues[j][i] = oldSm.length() > 0 ? oldSm : ".";
+				}
+				else if(field.equals("CN"))
+				{
+					String oldCn = oldVariant.getValue(j, "CN");
+					res.sampleFieldValues[j][i] = oldCn.length() > 0 ? oldCn : ".";
+				}
+				else if(field.equals("BC"))
+				{
+					String oldBc = oldVariant.getValue(j, "BC");
+					res.sampleFieldValues[j][i] = oldBc.length() > 0 ? oldBc : ".";
+				}
+				else if(field.equals("PE"))
+				{
+					String oldPe = oldVariant.getValue(j, "PE");
+					res.sampleFieldValues[j][i] = oldPe.length() > 0 ? oldPe : ".,.";
 				}
 			}
 		}
