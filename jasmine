@@ -1,9 +1,20 @@
 # Script for running Jasmine
 if [ "$(uname -s)" = 'Linux' ]; then
     BINDIR=$(dirname "$(readlink -f "$0" || echo "$(echo "$0" | sed -e 's,\\,/,g')")")
+    TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    MAX_HEAP="$((TOTAL_MEM_KB * 8 / 10 / 1024))m"
 else
     BINDIR=$(dirname "$(readlink "$0" || echo "$(echo "$0" | sed -e 's,\\,/,g')")")
+    TOTAL_MEM_BYTES=$(sysctl -n hw.memsize)
+    MAX_HEAP="$((TOTAL_MEM_BYTES * 8 / 10 / 1024 / 1024))m"
 fi
 
-java -cp $BINDIR/jasmine_iris.jar:$BINDIR/jasmine.jar Main iris_args=samtools_path=samtools,racon_path=racon,minimap_path=minimap2 "${@:1}"
+# Use JAVA_OPTS if set (e.g. JAVA_OPTS="-Xmx200g" jasmine ...),
+# otherwise fall back to 80% of system RAM detected above.
+if echo "${JAVA_OPTS}" | grep -q '\-Xmx'; then
+    HEAP_FLAG=""
+else
+    HEAP_FLAG="-Xmx${MAX_HEAP}"
+fi
 
+java ${JAVA_OPTS} ${HEAP_FLAG} -cp $BINDIR/jasmine_iris.jar:$BINDIR/jasmine.jar Main iris_args=samtools_path=samtools,racon_path=racon,minimap_path=minimap2 "${@:1}"
