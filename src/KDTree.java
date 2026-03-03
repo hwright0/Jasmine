@@ -18,10 +18,7 @@ import java.util.Stack;
 public class KDTree 
 {
 	Node root;
-	Node search;
-	PriorityQueue<Candidate> best;
 	int cnt;
-	int querySize;
 	int K;
 	
 	int n;
@@ -196,26 +193,27 @@ public class KDTree
 	}
 	
 	/*
-	 * Gets the k nearest neighbors for a query variant
+	 * Gets the k nearest neighbors for a query variant.
+	 * Thread-safe: all query state is local to this call.
 	 */
 	public Variant[] kNearestNeighbor(Variant p, int k) {
-		search = new Node(p);
-		best = new PriorityQueue<Candidate>();
-		querySize = k;
-		search(root, 0);
-		Variant[] res = new Variant[best.size()];
+		Node searchNode = new Node(p);
+		PriorityQueue<Candidate> bestCandidates = new PriorityQueue<Candidate>();
+		search(root, 0, searchNode, bestCandidates, k);
+		Variant[] res = new Variant[bestCandidates.size()];
 		int idx = res.length - 1;
-		while(!best.isEmpty())
+		while(!bestCandidates.isEmpty())
 		{
-			res[idx--] = best.poll().v;
+			res[idx--] = bestCandidates.poll().v;
 		}
 		return res;
 	}
 	
 	/*
-	 * Search the subtree rooted at cur for candidate points in the set of query's k-nearest neighbors
+	 * Search the subtree rooted at cur for candidate points in the set of query's k-nearest neighbors.
+	 * All state is passed as parameters so multiple threads can call this concurrently.
 	 */
-	private void search(Node ocur, int odepth) {
+	private void search(Node ocur, int odepth, Node search, PriorityQueue<Candidate> best, int querySize) {
 		Stack<Node> curs = new Stack<Node>();
 		Stack<Integer> depths = new Stack<Integer>();
 		Stack<Boolean> processedBest = new Stack<Boolean>();

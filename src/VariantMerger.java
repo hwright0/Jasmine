@@ -5,6 +5,9 @@
 
 import java.util.ArrayList;
 import java.util.PriorityQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class VariantMerger
 {
@@ -90,11 +93,34 @@ public class VariantMerger
 		// A heap of edges to be processed in non-decreasing order of distance
 		PriorityQueue<Edge> toProcess = new PriorityQueue<Edge>();
 		
-		// Get the first 4 nearest neighbors for every variant, and add their first edges to
-		// the heap
+		// Populate nearestNeighbors[] in parallel: each query is independent since
+		// KDTree.kNearestNeighbor is now fully thread-safe (no shared mutable state).
+		// Each slot nearestNeighbors[i] is written by exactly one thread so the array
+		// itself needs no synchronization.
+		int numThreads = Math.max(1, Settings.THREADS);
+		ExecutorService pool = Executors.newFixedThreadPool(numThreads);
+		CountDownLatch latch = new CountDownLatch(n);
+		for(int i = 0; i < n; i++)
+		{
+			final int fi = i;
+			pool.submit(() -> {
+				try
+				{
+					nearestNeighbors[fi] = knn.kNearestNeighbor(data[fi], 4);
+				}
+				finally
+				{
+					latch.countDown();
+				}
+			});
+		}
+		try { latch.await(); } catch(InterruptedException ie) { Thread.currentThread().interrupt(); }
+		pool.shutdown();
+		
+		// Build the initial edge heap sequentially now that nearestNeighbors[] is fully populated
 		for(int i = 0; i<n; i++)
 		{
-			nearestNeighbors[i] = knn.kNearestNeighbor(data[i], 4);
+			if(nearestNeighbors[i] == null || nearestNeighbors[i].length == 0) { continue; }
 			int maxDistAllowed = Math.max(data[i].maxDist, nearestNeighbors[i][0].maxDist);
 			if(Settings.REQUIRE_MUTUAL_DISTANCE)
 			{
