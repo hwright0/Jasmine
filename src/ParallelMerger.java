@@ -79,9 +79,9 @@ public class ParallelMerger {
 			
 		public void run()
 		{
-			while(!todo.isEmpty())
+			String graphID;
+			while((graphID = todo.poll()) != null)
 			{
-				String graphID = todo.poll();
 				System.out.println("Merging graph ID: " + graphID);
 				ArrayList<Variant> variantList = allVariants.get(graphID);
 				Collections.sort(variantList);
