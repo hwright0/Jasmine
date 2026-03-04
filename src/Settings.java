@@ -52,6 +52,7 @@ public class Settings {
 	
 	static String OUT_DIR = "output";
 	static int THREADS = 1;
+	static int HIERARCHICAL_BATCH_SIZE = 0; // 0 = disabled; e.g. 10000 for large graphs
 	
 	static int SPECIFIC_MIN_RCOUNT = 10;
 	static int SPECIFIC_MIN_LENGTH = 30;
@@ -95,7 +96,8 @@ public class Settings {
 		System.out.println("  k_jaccard       (int)    [9]        - the kmer size to use when computing Jaccard similarity of insertions");
 		System.out.println("  max_dup_length  (int)    [10k]      - the maximum length of duplication that can be converted to an insertion");
 		System.out.println("  min_support     (int)    [1]        - the minimum number of callsets a variant must be in to be output");
-		System.out.println("  threads         (int)    [1]        - the number of threads to use for merging the variants");
+		System.out.println("  threads              (int)    [1]        - the number of threads to use for merging the variants");
+		System.out.println("  hierarchical_batch_size (int) [0]        - batch size for hierarchical merging (0=disabled); use e.g. 10000 for 500k-sample graphs");
 		System.out.println("  spec_reads      (int)    [10]       - the minimum number of reads a variant needs to be in the specific callset");
 		System.out.println("  spec_len        (int)    [30]       - the minimum length a variant needs to be in the specific callset");
 		System.out.println("  genome_file     (String) []         - the reference genome being used");
@@ -325,6 +327,9 @@ public class Settings {
 					break;
 				case "threads":
 					THREADS = parseInt(val);
+					break;
+				case "hierarchical_batch_size":
+					HIERARCHICAL_BATCH_SIZE = parseInt(val);
 					break;
 				case "k_jaccard":
 					K_JACCARD = parseInt(val);
