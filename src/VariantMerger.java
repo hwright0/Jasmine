@@ -325,16 +325,30 @@ public class VariantMerger
 	 * (Phase 2), and finally propagates the combined groupings back into this.forest
 	 * (Phase 3).
 	 *
-	 * This reduces edge-loop complexity from O(n * k * log k * log n) to
-	 * O(B * k * log k * log B + R * k' * log k' * log R) where B = batch size,
-	 * R = number of batch representatives (≈ n/B in the worst case but much smaller
-	 * in practice when intra-batch merging collapses many variants).
+	 * Phase 1 batches are formed by splitting the position-sorted input array into
+	 * consecutive windows of Settings.HIERARCHICAL_BATCH_SIZE variants.  Because the
+	 * data is sorted, each window covers a contiguous genomic region, so variants that
+	 * should merge almost always land in the same batch.
+	 *
+	 * Same-sample filtering (ALLOW_INTRASAMPLE=false):
+	 *   After Phase 1 each batch representative stands for many samples.  Before Phase 2
+	 *   runs, the representative's sampleSets entry in finalVM.forest is replaced with
+	 *   the full union of all samples in its batch group.  This ensures that Phase 2
+	 *   correctly rejects merges whose underlying groups share a sample.
+	 *
+	 * Known approximation (inherent to any hierarchical scheme):
+	 *   A cluster whose union-find root is not the variant closest to the batch boundary
+	 *   may miss a valid cross-batch merge if the root is outside maxDist of the
+	 *   adjacent batch's root.  In practice this affects only a small fraction of
+	 *   boundary variants and is accepted for the large speedup it enables.
+	 *
+	 * Complexity: O(batches × B·k·log k·log B  +  R·k'·log k'·log R)
+	 *   vs  O(n·k·log k·log n)  for the monolithic edge loop,
+	 *   where B = batch size, R = number of phase-2 representatives.
 	 *
 	 * Phase 1 batches are run in parallel using Settings.THREADS threads.
-	 *
-	 * Limitation: same-sample filtering at the inter-batch level is approximate –
-	 * it uses only the batch representative's own sample, not the full set of samples
-	 * present in its batch group.  This is an accepted tradeoff.
+	 * This method is skipped when CLIQUE_MERGE or CENTROID_MERGE is set because
+	 * those modes require global group membership during merging.
 	 */
 	void runHierarchicalMerging()
 	{
@@ -413,6 +427,32 @@ public class VariantMerger
 		System.out.printf("[Hierarchical] Phase 2: merging %,d representatives%n", numReps);
 		// Constructor overwrites .index for each rep to its position in reps[]
 		VariantMerger finalVM = new VariantMerger(reps);
+
+		// ---- Fix Phase-2 same-sample filtering ----
+		// Forest(reps) initialises each rep's sampleSets entry with only its own
+		// single sample.  But a batch representative may stand for a group that
+		// already contains many samples (merged in Phase 1).  If we don't inject
+		// the full sample membership here, Phase 2 will allow merges between two
+		// representatives whose underlying batch groups share a sample — producing
+		// an output variant with duplicate genotypes from that sample.
+		//
+		// Fix: replace each single-element sampleSets[j] with the union of all
+		// samples that belong to that batch group.  batchRoot[i] already maps
+		// every original variant i to its batch-group representative (global idx),
+		// and globalToRepPos maps that global idx to the Phase-2 position j.
+		if(!Settings.ALLOW_INTRASAMPLE && finalVM.forest.sampleSets != null)
+		{
+			// Wipe the single-element sets the constructor just built
+			for(int j = 0; j < numReps; j++)
+				finalVM.forest.sampleSets[j] = new java.util.HashSet<Integer>();
+			// Accumulate the full sample membership for each batch group
+			for(int i = 0; i < n; i++)
+			{
+				int repPos = globalToRepPos[batchRoot[i]];
+				finalVM.forest.sampleSets[repPos].add(data[i].sample);
+			}
+		}
+
 		finalVM.runMerging();
 		// Restore .index for representatives back to global positions
 		for(int j = 0; j < numReps; j++) reps.get(j).index = repOrigIdx[j];
