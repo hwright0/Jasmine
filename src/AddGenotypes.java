@@ -2,14 +2,20 @@
  * Adds genotype information to a merged VCF file based on the genotypes of the original variants
  */
 import java.io.BufferedInputStream;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Scanner;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class AddGenotypes {
 	
@@ -54,14 +60,30 @@ public class AddGenotypes {
 	{
 		// FORMAT fields of all per-file variant calls
 		ArrayList<FileFormatField> inputFormats = new ArrayList<FileFormatField>();
-		
+
 		// The names of the samples present across all input files
 		ArrayList<String> allSampleNamesList = new ArrayList<String>();
-		
+
 		ArrayList<String> vcfFiles = PipelineManager.getFilesFromList(fileList);
-		for(String vcfFile : vcfFiles)
+
+		// ---- Load all FileFormatField objects in parallel ----
+		// Each file is independent (just parsing FORMAT fields), so safe to parallelise.
+		// Results collected in strict order below so inputFormats[] stays ordered.
+		int numThreads = Math.max(1, Settings.THREADS);
+		ExecutorService pool = Executors.newFixedThreadPool(numThreads);
+		List<Future<FileFormatField>> futures = new ArrayList<>(vcfFiles.size());
+		for(int s = 0; s < vcfFiles.size(); s++)
 		{
-			FileFormatField fileFormats = new FileFormatField(vcfFile, true);
+			final String fn = vcfFiles.get(s);
+			futures.add(pool.submit(() -> new FileFormatField(fn, true)));
+		}
+		pool.shutdown();
+
+		for(int s = 0; s < vcfFiles.size(); s++)
+		{
+			if(s % 50000 == 0)
+				System.out.printf("[Genotypes] Loading sample formats %,d / %,d%n", s, vcfFiles.size());
+			FileFormatField fileFormats = futures.get(s).get();
 			for(String sampleName : fileFormats.sampleNames)
 			{
 				allSampleNamesList.add(inputFormats.size() + "_" + sampleName);
@@ -84,9 +106,12 @@ public class AddGenotypes {
 		}
 				
 		// Now scan through merged VCF and combine FORMAT fields as needed, printing the updated file at the same time
-			Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(inputFile))));
-		PrintWriter out = new PrintWriter(new File(outputFile));
+		Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(inputFile))));
+		// Wrap in BufferedWriter so that the many small out.print() calls are coalesced
+		// into large OS-level writes instead of flushing to disk on every call.
+		PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)));
 		VcfHeader header = new VcfHeader();
+		int variantCount = 0;
 		boolean headerPrinted = false;
 		while(input.hasNext())
 		{
@@ -163,11 +188,17 @@ public class AddGenotypes {
 					
 					// Merge all format fields together and print the resulting VCF entry
 					VariantFormatField merged = merge(toMerge, sampleCounts, suppVec);
-					for(int i = 0; i<8; i++)
-					{
-						out.print(entry.tabTokens[i] + "\t");
-					}
-					out.println(merged);
+					// Build the full VCF row in one StringBuilder and write it in a single call.
+					// Avoids 8 separate out.print() calls and prevents materialising
+					// two copies of the (potentially very large) genotype string.
+					StringBuilder rowBuf = new StringBuilder();
+					for(int i = 0; i < 8; i++)
+						rowBuf.append(entry.tabTokens[i]).append('\t');
+					merged.appendTo(rowBuf);
+					out.println(rowBuf);
+					variantCount++;
+					System.out.printf("[Genotypes] Wrote variant %d (%d samples)%n",
+						variantCount, merged.numSamples());
 				}
 			}
 		}
@@ -562,44 +593,40 @@ public class AddGenotypes {
 		}
 		
 		/*
+		 * Appends the FORMAT string and all per-sample genotype columns directly into an
+		 * existing StringBuilder, avoiding an extra String allocation for large row sizes.
+		 */
+		void appendTo(StringBuilder res)
+		{
+			if(fieldNames.length == 0) return;
+
+			// FORMAT field name string (e.g. "GT:DV:DR:...")
+			for(int i = 0; i < fieldNames.length; i++)
+			{
+				res.append(fieldNames[i]);
+				if(i < fieldNames.length - 1) res.append(':');
+			}
+			res.append('\t');
+
+			// Per-sample values, tab-separated; colon-separated within each sample
+			for(int i = 0; i < sampleFieldValues.length; i++)
+			{
+				for(int j = 0; j < sampleFieldValues[i].length; j++)
+				{
+					res.append(sampleFieldValues[i][j]);
+					if(j < sampleFieldValues[i].length - 1) res.append(':');
+				}
+				if(i < sampleFieldValues.length - 1) res.append('\t');
+			}
+		}
+
+		/*
 		 * Gets a VCF-format, tab-separated representation of the FORMAT string plus per-sample genotypes
 		 */
 		public String toString()
 		{
-			if(fieldNames.length == 0)
-			{
-				return "";
-			}
-			
-			StringBuilder res = new StringBuilder("");
-			
-			// First token is the FORMAT string, with field names separated by ":"
-			for(int i = 0; i<fieldNames.length; i++)
-			{
-				res.append(fieldNames[i]);
-				if(i < fieldNames.length - 1)
-				{
-					res.append(":");
-				}
-			}
-			res.append("\t");
-			
-			// Field values with samples separated by tabs and values within each sample separated by colons
-			for(int i = 0; i<sampleFieldValues.length; i++)
-			{
-				for(int j = 0; j<sampleFieldValues[i].length; j++)
-				{
-					res.append(sampleFieldValues[i][j]);
-					if(j < sampleFieldValues[i].length - 1)
-					{
-						res.append(":");
-					}
-				}
-				if(i < sampleFieldValues.length - 1)
-				{
-					res.append("\t");
-				}
-			}
+			StringBuilder res = new StringBuilder();
+			appendTo(res);
 			return res.toString();
 		}
 	}

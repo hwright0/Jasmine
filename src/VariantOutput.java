@@ -12,8 +12,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class VariantOutput {
 	
@@ -33,17 +37,141 @@ public class VariantOutput {
 	}
 	
 	/*
-	 * Given a list of VCF files and merging results, output an updated VCF file
+	 * Lightweight container returned by each parallel file-reader task.
+	 * headerLines is non-null only for sample 0; entries contains the variants from
+	 * that sample with duplicate IDs already disambiguated within the file.
+	 */
+	static class SampleData
+	{
+		List<String>   headerLines; // non-null only for sample 0
+		List<VcfEntry> entries;
+		SampleData(List<String> h, List<VcfEntry> e) { headerLines = h; entries = e; }
+	}
+
+	/*
+	 * Given a list of VCF files and merging results, output an updated VCF file.
+	 *
+	 * All files are submitted to a thread pool (size = Settings.THREADS) for parallel
+	 * I/O.  Results are consumed in strict sample order so that processVariant's
+	 * state machine (init → update → finalize) sees samples 0, 1, 2, … in order.
 	 */
 	public void writeMergedVariants(String fileList, String outFile) throws Exception
 	{
 		PrintWriter out = new PrintWriter(new File(outFile));
-		int sample = 0;
-		
-		VcfHeader header = new VcfHeader();
-		
+
+		ArrayList<String> filenames = PipelineManager.getFilesFromList(fileList);
+		int numSamples = filenames.size();
+
+		// ---- Phase 1: parallel file reads ----
+		// Each task opens one sample's VCF, parses VcfEntry objects,
+		// deduplicates IDs within that file, and returns a SampleData.
+		// The main thread submits all tasks upfront; the thread pool keeps
+		// Settings.THREADS file reads in flight simultaneously.
+		int numThreads = Math.max(1, Settings.THREADS);
+		ExecutorService pool = Executors.newFixedThreadPool(numThreads);
+		List<Future<SampleData>> futures = new ArrayList<>(numSamples);
+
+		for(int s = 0; s < numSamples; s++)
+		{
+			final String  fn   = filenames.get(s);
+			final boolean isS0 = (s == 0);
+			futures.add(pool.submit(() -> {
+				List<String>   headers = isS0 ? new ArrayList<>() : null;
+				List<VcfEntry> entries = new ArrayList<>();
+				HashSet<String> ids    = new HashSet<>();
+				Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fn))));
+				while(input.hasNext())
+				{
+					String line = input.nextLine();
+					if(line.length() == 0) continue;
+					if(line.startsWith("#"))
+					{
+						if(isS0) headers.add(line);
+						continue;
+					}
+					VcfEntry entry = VcfEntry.fromLine(line);
+					// Deduplicate IDs within this file (same logic as original)
+					if(ids.contains(entry.getId()))
+					{
+						String oldId = entry.getId();
+						int index = 1;
+						while(true)
+						{
+							String newId = oldId + "_duplicate" + index;
+							if(!ids.contains(newId)) { entry.setId(newId); break; }
+							index++;
+						}
+					}
+					ids.add(entry.getId());
+					entries.add(entry);
+				}
+				input.close();
+				return new SampleData(headers, entries);
+			}));
+		}
+		pool.shutdown();
+
+		// ---- Phase 2: sequential processing in sample order ----
+		// futures.get(s).get() blocks until file s is ready; by the time we reach
+		// sample s+1 the pool has likely already prefetched it, hiding most I/O latency.
+		VcfHeader header      = new VcfHeader();
 		boolean printedHeader = false;
-		
+
+		for(int s = 0; s < numSamples; s++)
+		{
+			if(s % 50000 == 0)
+				System.out.printf("[Output] Processing sample %,d / %,d%n", s, numSamples);
+
+			SampleData sd = futures.get(s).get();
+
+			// Only sample 0 contributes header lines
+			if(s == 0 && sd.headerLines != null)
+				for(String line : sd.headerLines) header.addLine(line);
+
+			// Print header once (before the first variant line, same semantics as original)
+			if(!printedHeader)
+			{
+				printedHeader = true;
+				header.addInfoField("SUPP_VEC",             "1", "String",  "Vector of supporting samples");
+				header.addInfoField("SUPP_VEC_EXT",         "1", "String",  "Vector of supporting samples, potentially extended across multiple merges");
+				header.addInfoField("SUPP",                 "1", "Integer", "Number of samples supporting the variant");
+				header.addInfoField("SUPP_EXT",             "1", "Integer", "Number of samples supporting the variant, potentially extended across multiple merges");
+				header.addInfoField("IDLIST",               ".", "String",  "Variant IDs of variants merged to make this call (at most 1 per sample)");
+				header.addInfoField("IDLIST_EXT",           ".", "String",  "Variant IDs of variants merged, potentially extended across multiple merges");
+				header.addInfoField("SVMETHOD",             "1", "String",  "");
+				header.addInfoField("STARTVARIANCE",        "1", "String",  "Variance of start position for variants merged into this one");
+				header.addInfoField("ENDVARIANCE",          "1", "String",  "Variance of end position for variants merged into this one");
+				header.addInfoField("AVG_START",            "1", "String",  "Average start position for variants merged into this one");
+				header.addInfoField("AVG_END",              "1", "String",  "Average end position for variants merged into this one");
+				header.addInfoField("AVG_LEN",              "1", "String",  "Average length for variants merged into this one");
+				header.addInfoField("END",                  "1", "String",  "The end position of the variant");
+				header.addInfoField("SVLEN",                "1", "String",  "The length (in bp) of the variant");
+				header.addInfoField("PRECISE",              "0", "Flag",    "Precise structural variation");
+				header.addInfoField("IMPRECISE",            "0", "Flag",    "Imprecise structural variation");
+				if(Settings.ALLOW_INTRASAMPLE)
+				{
+					header.addInfoField("ALLVARS_EXT",       ".", "String", "A comma-separated of all variants supporting this call");
+					header.addInfoField("VARCALLS",          "1", "String", "The number of variant calls supporting this variant");
+					header.addInfoField("INTRASAMPLE_IDLIST",".", "String", "The IDs which were merged in the most recent round of merging");
+				}
+				header.print(out);
+			}
+
+			for(VcfEntry entry : sd.entries)
+				groups.get(entry.getGraphID()).processVariant(entry, s, out);
+		}
+
+		out.close();
+	}
+
+	// ----- dead code below (original sequential loop) retained only as reference -----
+	@SuppressWarnings("unused")
+	private void _writeMergedVariants_sequential_original(String fileList, String outFile) throws Exception
+	{
+		PrintWriter out = new PrintWriter(new File(outFile));
+		int sample = 0;
+		VcfHeader header = new VcfHeader();
+		boolean printedHeader = false;
 		ArrayList<String> filenames = PipelineManager.getFilesFromList(fileList);
 		for(String filename : filenames)
 		{
