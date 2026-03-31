@@ -73,6 +73,8 @@ public class Settings {
 	
 	static double OVERLAP_REQUIRED = 0.0;
 	
+	static boolean NO_SUPP_VEC = false;
+	
 	/*
 	 * Print the usage menu
 	 */
@@ -133,6 +135,7 @@ public class Settings {
 		System.out.println("  --non_mutual_distance               - no longer require a pair of points to be within both of their distance thresholds");
 		System.out.println("  --default_zero_genotype             - marks genotype as 0|0 instead of ./. for any samples in which a merged variant is absent");
 		System.out.println("  --nonlinear_dist                    - disable distance threshold depending on variant length and use max_dist instead");
+	System.out.println("  --no_supp_vec                       - omit SUPP_VEC and SUPP_VEC_EXT from the output INFO field");
 
 
 		System.out.println();
@@ -295,6 +298,10 @@ public class Settings {
 				else if(args[i].endsWith("nonlinear_dist"))
 				{
 					USE_LINEAR_THRESHOLD = false;
+				}
+				else if(args[i].endsWith("no_supp_vec"))
+				{
+					NO_SUPP_VEC = true;
 				}
 				continue;
 			}

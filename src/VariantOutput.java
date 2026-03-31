@@ -150,8 +150,11 @@ public class VariantOutput {
 			if(!printedHeader)
 			{
 				printedHeader = true;
-				header.addInfoField("SUPP_VEC",             "1", "String",  "Vector of supporting samples");
-				header.addInfoField("SUPP_VEC_EXT",         "1", "String",  "Vector of supporting samples, potentially extended across multiple merges");
+				if(!Settings.NO_SUPP_VEC)
+				{
+					header.addInfoField("SUPP_VEC",             "1", "String",  "Vector of supporting samples");
+					header.addInfoField("SUPP_VEC_EXT",         "1", "String",  "Vector of supporting samples, potentially extended across multiple merges");
+				}
 				header.addInfoField("SUPP",                 "1", "Integer", "Number of samples supporting the variant");
 				header.addInfoField("SUPP_EXT",             "1", "Integer", "Number of samples supporting the variant, potentially extended across multiple merges");
 				header.addInfoField("IDLIST",               ".", "String",  "Variant IDs of variants merged to make this call (at most 1 per sample)");
@@ -366,20 +369,35 @@ public class VariantOutput {
 				consensus[i] = null;
 				idLists[i] = new StringBuilder("");
 				intraIdLists[i] = new StringBuilder("");
-				char[] suppVec = new char[sampleCount];
-				Arrays.fill(suppVec, '0');
-				for(int j = 0; j<sizes[i]; j++)
+				if(Settings.NO_SUPP_VEC)
 				{
-					int sampleID = groups[i].get(j).sample;
-					if(suppVec[sampleID] == '0')
+					// Just count distinct samples without building the full vector string
+					HashSet<Integer> seen = new HashSet<>();
+					for(int j = 0; j<sizes[i]; j++)
 					{
-						suppVec[sampleID] = '1';
-						supportCounts[i]++;
+						seen.add(groups[i].get(j).sample);
+						varToGroup.put(groups[i].get(j).id, i);
 					}
-					String idString = groups[i].get(j).id;
-					varToGroup.put(idString, i);
+					supportCounts[i] = seen.size();
+					supportVectors[i] = "";
 				}
-				supportVectors[i] = new String(suppVec);
+				else
+				{
+					char[] suppVec = new char[sampleCount];
+					Arrays.fill(suppVec, '0');
+					for(int j = 0; j<sizes[i]; j++)
+					{
+						int sampleID = groups[i].get(j).sample;
+						if(suppVec[sampleID] == '0')
+						{
+							suppVec[sampleID] = '1';
+							supportCounts[i]++;
+						}
+						String idString = groups[i].get(j).id;
+						varToGroup.put(idString, i);
+					}
+					supportVectors[i] = new String(suppVec);
+				}
 			}
 		}
 		
@@ -433,28 +451,31 @@ public class VariantOutput {
 			
 			if(Settings.INPUTS_MERGED)
 			{
-				// Set the extended support vector
-				// First look for extended suppVec fields, then regular suppVec fields, then just use a single "1"
-				String suppVecExt = entry.getInfo("SUPP_VEC_EXT");
-				if(suppVecExt.length() == 0)
+				if(!Settings.NO_SUPP_VEC)
 				{
-					suppVecExt = entry.getInfo("SUPP_VEC");
-				}
-				if(suppVecExt.length() == 0)
-				{
-					suppVecExt = "1";
-				}
-				
-				// Add zeroes for any absent sample before this
-				for(int i = 0; i<sample; i++)
-				{
-					int previouslyMergedCount = VariantInput.previouslyMergedSamples.get(i);
-					for(int j = 0; j<previouslyMergedCount; j++)
+					// Set the extended support vector
+					// First look for extended suppVec fields, then regular suppVec fields, then just use a single "1"
+					String suppVecExt = entry.getInfo("SUPP_VEC_EXT");
+					if(suppVecExt.length() == 0)
 					{
-						suppVecExt = "0" + suppVecExt;
+						suppVecExt = entry.getInfo("SUPP_VEC");
 					}
+					if(suppVecExt.length() == 0)
+					{
+						suppVecExt = "1";
+					}
+					
+					// Add zeroes for any absent sample before this
+					for(int i = 0; i<sample; i++)
+					{
+						int previouslyMergedCount = VariantInput.previouslyMergedSamples.get(i);
+						for(int j = 0; j<previouslyMergedCount; j++)
+						{
+							suppVecExt = "0" + suppVecExt;
+						}
+					}
+					consensus[groupNumber].setInfo("SUPP_VEC_EXT", suppVecExt);
 				}
-				consensus[groupNumber].setInfo("SUPP_VEC_EXT", suppVecExt);
 				
 				// Set the extended ID List
 				// First look for extended IDList fields, then regular IDList fields
@@ -600,33 +621,36 @@ public class VariantOutput {
 			// Update cascaded information from previous merges, if any.
 			if(Settings.INPUTS_MERGED && lastAdded[groupNumber] != sample)
 			{
-				// Update the extended support vector
-				String suppVecExt = entry.getInfo("SUPP_VEC_EXT");
-				if(suppVecExt.length() == 0)
+				if(!Settings.NO_SUPP_VEC)
 				{
-					suppVecExt = entry.getInfo("SUPP_VEC");
-				}
-				if(suppVecExt.length() == 0)
-				{
-					suppVecExt = "1";
-				}
-				
-				// Add zeroes for any absent sample before this
-				for(int i = sample-1; i>=0; i--)
-				{
-					if(supportVectors[groupNumber].charAt(i) == '1')
+					// Update the extended support vector
+					String suppVecExt = entry.getInfo("SUPP_VEC_EXT");
+					if(suppVecExt.length() == 0)
 					{
-						break;
+						suppVecExt = entry.getInfo("SUPP_VEC");
 					}
-					int previouslyMergedCount = VariantInput.previouslyMergedSamples.get(i);
-					for(int j = 0; j<previouslyMergedCount; j++)
+					if(suppVecExt.length() == 0)
 					{
-						suppVecExt = "0" + suppVecExt;
+						suppVecExt = "1";
 					}
-				}
 					
-				suppVecExt = consensus[groupNumber].getInfo("SUPP_VEC_EXT") + suppVecExt;
-				consensus[groupNumber].setInfo("SUPP_VEC_EXT", suppVecExt);
+					// Add zeroes for any absent sample before this
+					for(int i = sample-1; i>=0; i--)
+					{
+						if(supportVectors[groupNumber].charAt(i) == '1')
+						{
+							break;
+						}
+						int previouslyMergedCount = VariantInput.previouslyMergedSamples.get(i);
+						for(int j = 0; j<previouslyMergedCount; j++)
+						{
+							suppVecExt = "0" + suppVecExt;
+						}
+					}
+						
+					suppVecExt = consensus[groupNumber].getInfo("SUPP_VEC_EXT") + suppVecExt;
+					consensus[groupNumber].setInfo("SUPP_VEC_EXT", suppVecExt);
+				}
 				
 				// Update the extended ID List
 				String idListExt = entry.getInfo("IDLIST_EXT");
@@ -714,7 +738,10 @@ public class VariantOutput {
 			consensus[groupNumber].setInfo("AVG_END", String.format("%.6f", totalEnd * 1.0 / groupSize));
 			
 			// Fill the support-related fields
-			consensus[groupNumber].setInfo("SUPP_VEC", supportVectors[groupNumber]);
+			if(!Settings.NO_SUPP_VEC)
+			{
+				consensus[groupNumber].setInfo("SUPP_VEC", supportVectors[groupNumber]);
+			}
 			consensus[groupNumber].setInfo("SUPP", supportCounts[groupNumber]+"");
 			consensus[groupNumber].setInfo("SVMETHOD", "JASMINE");
 			consensus[groupNumber].setInfo("IDLIST", idLists[groupNumber].toString());
@@ -729,7 +756,7 @@ public class VariantOutput {
 				consensus[groupNumber].fixImprecision();
 			}
 							
-			if(Settings.INPUTS_MERGED)
+			if(Settings.INPUTS_MERGED && !Settings.NO_SUPP_VEC)
 			{
 				// Add zeroes to SUPP_VEC_EXT as needed
 				for(int i = sample+1; i < supportVectors[groupNumber].length(); i++)
