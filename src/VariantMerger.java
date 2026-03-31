@@ -76,15 +76,24 @@ public class VariantMerger
 	 */
 	void runMerging()
 	{
-		runMerging(Settings.THREADS);
+		runMerging(Settings.THREADS, true);
+	}
+
+	/*
+	 * Runs merging with an explicit thread count, skipping hierarchical logic.
+	 * Used by Phase 1 batch sub-mergers to avoid recursive re-entry.
+	 */
+	void runMerging(int threads)
+	{
+		runMerging(threads, false);
 	}
 
 	/*
 	 * Runs merging with an explicit thread count.
-	 * Callers inside hierarchical Phase 1 pass threads=1 because the
-	 * batches are already running in parallel across the thread pool.
+	 * allowHierarchical controls whether sample-based hierarchical merging
+	 * is considered; Phase 1 sub-mergers pass false to prevent infinite recursion.
 	 */
-	void runMerging(int threads)
+	void runMerging(int threads, boolean allowHierarchical)
 	{
 		if(n == 1)
 		{
@@ -92,7 +101,7 @@ public class VariantMerger
 		}
 
 		// Delegate to hierarchical merging for large dense graphs when requested.
-		if(!Settings.CLIQUE_MERGE && !Settings.CENTROID_MERGE)
+		if(allowHierarchical && !Settings.CLIQUE_MERGE && !Settings.CENTROID_MERGE)
 		{
 			if(Settings.HIERARCHICAL_BATCH_SAMPLES > 0)
 			{
