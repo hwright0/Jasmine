@@ -436,7 +436,17 @@ public class AddGenotypes {
 			variantFormats = new ArrayList<VariantFormatField>();
 			idToVariantIndex = new HashMap<String, Integer>();
 			header = new VcfHeader();
-			Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fileName))));
+			BgzipReader bgzReader = null;
+			Scanner input;
+			if(fileName.endsWith(".gz"))
+			{
+				bgzReader = new BgzipReader(fileName);
+				input = bgzReader.getScanner();
+			}
+			else
+			{
+				input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fileName))));
+			}
 			boolean extractedSampleNames = false;
 			while(input.hasNext())
 			{
@@ -528,7 +538,14 @@ public class AddGenotypes {
 					sampleNames = new String[0];
 				}
 			}
-			input.close();
+			if(bgzReader != null)
+			{
+				bgzReader.close();
+			}
+			else
+			{
+				input.close();
+			}
 		}
 	}
 	
