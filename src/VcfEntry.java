@@ -740,6 +740,21 @@ public class VcfEntry {
 		{
 			return type;
 		}
+		if(type.equals("CNV"))
+		{
+			String alt = getAlt();
+			if(alt.startsWith("<") && alt.endsWith(">"))
+			{
+				String altType = alt.substring(1, alt.length() - 1);
+				if(!altType.equals("CNV"))
+				{
+					return altType;
+				}
+			}
+			int length = getLength();
+			if(length < 0) return "DEL";
+			else if(length > 0) return "DUP";
+		}
 		if(hasInfoField("CHR2") && !getInfo("CHR2").equals(getChromosome()))
 		{
 			return "TRA";
