@@ -481,7 +481,7 @@ public class VariantMerger
 			}
 		}
 
-		finalVM.runMerging();
+		finalVM.runMerging(Settings.THREADS);  // allowHierarchical=false to prevent re-entry
 		for(int j = 0; j < numReps; j++) reps.get(j).index = repOrigIdx[j];
 		System.out.printf("[SampleHierarchical] Phase 2 done in %.1fs%n",
 			(System.currentTimeMillis() - tP2) / 1000.0);
