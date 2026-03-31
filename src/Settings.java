@@ -107,6 +107,7 @@ public class Settings {
 		System.out.println("  iris_args       (String) []         - a comma-separated list of optional arguments to pass to Iris");
 		System.out.println("  out_dir         (String) [output]   - the directory where intermediate files go");
 		System.out.println("  samtools_path   (String) [samtools] - the path to the samtools executable used for coverting duplications");
+
 		System.out.println("  chr_norm_file   (String) []         - the path to a file containing chromosome name mappings, if they are being normalized");
 		System.out.println("  sample_dists    (String) []         - the path to a file containing distance thresholds for each sample, one per line");
 		System.out.println("  min_overlap     (float)  [0]        - the minimum reciprocal overlap for DEL/INV/DUP SVs");
@@ -446,6 +447,12 @@ public class Settings {
 				usage();
 				System.exit(0);
 			}
+		}
+		
+		// Ensure OUT_FILE ends with .gz since output is always bgzipped
+		if(OUT_FILE.length() > 0 && !OUT_FILE.endsWith(".gz"))
+		{
+			OUT_FILE = OUT_FILE + ".gz";
 		}
 		
 		if(!OUT_DIR.startsWith("/"))

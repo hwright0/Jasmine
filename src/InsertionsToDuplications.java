@@ -31,9 +31,11 @@ public class InsertionsToDuplications {
 	 */
 	static void convertFile(String inputFile, String outputFile) throws Exception
 	{
-		Scanner input = new Scanner(new FileInputStream(new File(inputFile)));
+		BgzipReader bgzReader = new BgzipReader(inputFile);
+		Scanner input = bgzReader.getScanner();
 		
-		PrintWriter out = new PrintWriter(new File(outputFile));
+		BgzipWriter bgzWriter = new BgzipWriter(outputFile, Settings.THREADS);
+		PrintWriter out = bgzWriter.getWriter();
 		
 		VcfHeader header = new VcfHeader();
 		
@@ -89,7 +91,7 @@ public class InsertionsToDuplications {
 		
 		System.out.println("Number of insertions converted back to duplications: " + countDup + " out of " + totalEntries + " total variants");
 		
-		input.close();
-		out.close();
+		bgzReader.close();
+		bgzWriter.close();
 	}
 }

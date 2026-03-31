@@ -57,7 +57,8 @@ public class VariantOutput {
 	 */
 	public void writeMergedVariants(String fileList, String outFile) throws Exception
 	{
-		PrintWriter out = new PrintWriter(new File(outFile));
+		BgzipWriter bgzWriter = new BgzipWriter(outFile, Settings.THREADS);
+		PrintWriter out = bgzWriter.getWriter();
 
 		ArrayList<String> filenames = PipelineManager.getFilesFromList(fileList);
 		int numSamples = filenames.size();
@@ -161,7 +162,7 @@ public class VariantOutput {
 				groups.get(entry.getGraphID()).processVariant(entry, s, out);
 		}
 
-		out.close();
+		bgzWriter.close();
 	}
 
 	// ----- dead code below (original sequential loop) retained only as reference -----

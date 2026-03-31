@@ -106,10 +106,10 @@ public class AddGenotypes {
 		}
 				
 		// Now scan through merged VCF and combine FORMAT fields as needed, printing the updated file at the same time
-		Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(inputFile))));
-		// Wrap in BufferedWriter so that the many small out.print() calls are coalesced
-		// into large OS-level writes instead of flushing to disk on every call.
-		PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)));
+		BgzipReader bgzReader = new BgzipReader(inputFile);
+		Scanner input = bgzReader.getScanner();
+		BgzipWriter bgzWriter = new BgzipWriter(outputFile, Settings.THREADS);
+		PrintWriter out = bgzWriter.getWriter();
 		VcfHeader header = new VcfHeader();
 		int variantCount = 0;
 		boolean headerPrinted = false;
@@ -202,8 +202,8 @@ public class AddGenotypes {
 				}
 			}
 		}
-		input.close();
-		out.close();
+		bgzReader.close();
+		bgzWriter.close();
 	}
 	
 	/*
@@ -366,11 +366,21 @@ public class AddGenotypes {
 				else if(field.equals("SM"))
 				{
 					String oldSm = oldVariant.getValue(j, "SM");
+					if(oldSm.length() > 0 && !oldSm.equals("."))
+					{
+						try { Float.parseFloat(oldSm); }
+						catch(NumberFormatException e) { oldSm = "."; }
+					}
 					res.sampleFieldValues[j][i] = oldSm.length() > 0 ? oldSm : ".";
 				}
 				else if(field.equals("CN"))
 				{
 					String oldCn = oldVariant.getValue(j, "CN");
+					if(oldCn.length() > 0 && !oldCn.equals("."))
+					{
+						try { Integer.parseInt(oldCn); }
+						catch(NumberFormatException e) { oldCn = "."; }
+					}
 					res.sampleFieldValues[j][i] = oldCn.length() > 0 ? oldCn : ".";
 				}
 				else if(field.equals("BC"))
