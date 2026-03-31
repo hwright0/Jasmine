@@ -142,4 +142,24 @@ public class VcfHeader {
 		lines.add(lastFormatFieldIndex + 1, line);
 		lastFormatFieldIndex++;
 	}
+	
+	/*
+	 * Remove an INFO field header line by ID
+	 */
+	void removeInfoField(String id)
+	{
+		if(!infoFields.contains(id)) return;
+		infoFields.remove(id);
+		String prefix = infoKey + id + ",";
+		for(int i = 0; i < lines.size(); i++)
+		{
+			if(lines.get(i).startsWith(prefix))
+			{
+				lines.remove(i);
+				lastInfoFieldIndex--;
+				lastFormatFieldIndex--;
+				break;
+			}
+		}
+	}
 }

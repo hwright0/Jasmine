@@ -540,6 +540,27 @@ public class VcfEntry {
 	}
 	
 	/*
+	 * Remove a particular VCF INFO field if it exists
+	 */
+	public void removeInfo(String field)
+	{
+		String[] infoFields = tabTokens[7].split(";");
+		StringBuilder sb = new StringBuilder();
+		for(String semitoken : infoFields)
+		{
+			int equalIndex = semitoken.indexOf('=');
+			if(equalIndex != -1)
+			{
+				String key = semitoken.substring(0, equalIndex);
+				if(key.equals(field)) continue;
+			}
+			if(sb.length() > 0) sb.append(";");
+			sb.append(semitoken);
+		}
+		tabTokens[7] = sb.toString();
+	}
+	
+	/*
 	 * Get the number of supporting reads
 	 */
 	public int getReadSupport() throws Exception

@@ -156,12 +156,20 @@ public class AddGenotypes {
 						header.lines.set(header.lines.size() - 1, newLastLine.toString());
 					}
 					
+					// Strip SUPP_VEC/SUPP_VEC_EXT header lines if --no_supp_vec
+					if(Settings.NO_SUPP_VEC)
+					{
+						header.removeInfoField("SUPP_VEC");
+						header.removeInfoField("SUPP_VEC_EXT");
+					}
+					
 					header.print(out);
 				}
 				
 				// This is the per-variant merging and printing logic
 				VcfEntry entry = new VcfEntry(line);
 				String suppVec = entry.getInfo("SUPP_VEC");
+				
 				if(suppVec.length() == 0)
 				{
 					// If there is no support vector field, just leave the entry as-is
@@ -188,9 +196,15 @@ public class AddGenotypes {
 					
 					// Merge all format fields together and print the resulting VCF entry
 					VariantFormatField merged = merge(toMerge, sampleCounts, suppVec);
+					
+					// Strip SUPP_VEC and SUPP_VEC_EXT from the INFO column if --no_supp_vec
+					if(Settings.NO_SUPP_VEC)
+					{
+						entry.removeInfo("SUPP_VEC");
+						entry.removeInfo("SUPP_VEC_EXT");
+					}
+					
 					// Build the full VCF row in one StringBuilder and write it in a single call.
-					// Avoids 8 separate out.print() calls and prevents materialising
-					// two copies of the (potentially very large) genotype string.
 					StringBuilder rowBuf = new StringBuilder();
 					for(int i = 0; i < 8; i++)
 						rowBuf.append(entry.tabTokens[i]).append('\t');
