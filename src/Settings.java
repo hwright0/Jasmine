@@ -52,7 +52,6 @@ public class Settings {
 	
 	static String OUT_DIR = "output";
 	static int THREADS = 1;
-	static int HIERARCHICAL_BATCH_SIZE = 0;   // 0 = disabled; batches by variant-array position
 	static int HIERARCHICAL_BATCH_SAMPLES = 0; // 0 = disabled; batches by sample ID (preferred for large cohorts)
 	
 	static int SPECIFIC_MIN_RCOUNT = 10;
@@ -98,7 +97,6 @@ public class Settings {
 		System.out.println("  max_dup_length  (int)    [10k]      - the maximum length of duplication that can be converted to an insertion");
 		System.out.println("  min_support     (int)    [1]        - the minimum number of callsets a variant must be in to be output");
 		System.out.println("  threads              (int)    [1]        - the number of threads to use for merging the variants");
-		System.out.println("  hierarchical_batch_size    (int) [0]     - hierarchical merging by variant-array position; batch=N variants");
 		System.out.println("  hierarchical_batch_samples (int) [0]     - hierarchical merging by sample ID; batch=N samples (preferred for large cohorts, e.g. 10000)");
 		System.out.println("  spec_reads      (int)    [10]       - the minimum number of reads a variant needs to be in the specific callset");
 		System.out.println("  spec_len        (int)    [30]       - the minimum length a variant needs to be in the specific callset");
@@ -330,9 +328,6 @@ public class Settings {
 					break;
 				case "threads":
 					THREADS = parseInt(val);
-					break;
-				case "hierarchical_batch_size":
-					HIERARCHICAL_BATCH_SIZE = parseInt(val);
 					break;
 				case "hierarchical_batch_samples":
 					HIERARCHICAL_BATCH_SAMPLES = parseInt(val);

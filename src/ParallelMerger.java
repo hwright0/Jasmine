@@ -47,28 +47,41 @@ public class ParallelMerger {
 	}
 	
 	/*
-	 * Start merging in parallel, initializing all threads
+	 * Start merging in parallel, initializing all threads.
+	 * When hierarchical merging is enabled, graphs are processed one at a time
+	 * since each graph's hierarchical merge uses its own internal thread pool.
 	 */
 	void run() throws Exception
 	{
-		// The last thread in the array is the main thread, so it calls
-		// run() instead of start() and doesn't get joined below
-		MyThread[] threads = new MyThread[numThreads];
-		for(int i = 0; i<numThreads; i++)
+		boolean hierarchical = (Settings.HIERARCHICAL_BATCH_SAMPLES > 0);
+
+		if(hierarchical)
 		{
-			threads[i] = new MyThread();
-			if(i == numThreads - 1)
-			{
-				threads[i].run();
-			}
-			else
-			{
-				threads[i].start();
-			}
+			// Sequential: each graph gets all threads internally
+			MyThread t = new MyThread();
+			t.run();
 		}
-		for(int i = 0; i<numThreads-1; i++)
+		else
 		{
-			threads[i].join();
+			// The last thread in the array is the main thread, so it calls
+			// run() instead of start() and doesn't get joined below
+			MyThread[] threads = new MyThread[numThreads];
+			for(int i = 0; i<numThreads; i++)
+			{
+				threads[i] = new MyThread();
+				if(i == numThreads - 1)
+				{
+					threads[i].run();
+				}
+				else
+				{
+					threads[i].start();
+				}
+			}
+			for(int i = 0; i<numThreads-1; i++)
+			{
+				threads[i].join();
+			}
 		}
 	}
 

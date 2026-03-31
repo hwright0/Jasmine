@@ -76,16 +76,22 @@ public class VariantMerger
 	 */
 	void runMerging()
 	{
+		runMerging(Settings.THREADS);
+	}
+
+	/*
+	 * Runs merging with an explicit thread count.
+	 * Callers inside hierarchical Phase 1 pass threads=1 because the
+	 * batches are already running in parallel across the thread pool.
+	 */
+	void runMerging(int threads)
+	{
 		if(n == 1)
 		{
 			return;
 		}
 
 		// Delegate to hierarchical merging for large dense graphs when requested.
-		// Sample-based batching (preferred) partitions by sample ID so that every
-		// batch sees all genomic loci with no positional boundary artefacts and
-		// sample sets are disjoint by construction.
-		// Position-based batching is kept as a fallback for non-standard layouts.
 		if(!Settings.CLIQUE_MERGE && !Settings.CENTROID_MERGE)
 		{
 			if(Settings.HIERARCHICAL_BATCH_SAMPLES > 0)
@@ -93,16 +99,12 @@ public class VariantMerger
 				runSampleHierarchicalMerging();
 				return;
 			}
-			if(Settings.HIERARCHICAL_BATCH_SIZE > 0 && n > Settings.HIERARCHICAL_BATCH_SIZE)
-			{
-				runHierarchicalMerging();
-				return;
-			}
 		}
 
 		long mergeStartTime = System.currentTimeMillis();
+		int numThreads = Math.max(1, threads);
 		System.out.printf("[Merge] Graph with %,d variants: building kNN graph (%d threads)%n",
-			n, Math.max(1, Settings.THREADS));
+			n, numThreads);
 
 		// For each variant v, how many of its nearest neighbors have had their edges
 		// from v considered already.  
@@ -120,7 +122,6 @@ public class VariantMerger
 		// KDTree.kNearestNeighbor is now fully thread-safe (no shared mutable state).
 		// Each slot nearestNeighbors[i] is written by exactly one thread so the array
 		// itself needs no synchronization.
-		int numThreads = Math.max(1, Settings.THREADS);
 		ExecutorService pool = Executors.newFixedThreadPool(numThreads);
 		CountDownLatch latch = new CountDownLatch(n);
 		for(int i = 0; i < n; i++)
@@ -402,9 +403,8 @@ public class VariantMerger
 					Variant[] batchData = new Variant[len];
 					for(int i = 0; i < len; i++) batchData[i] = data[bucket.get(i)];
 
-					// VariantMerger constructor sets batchData[i].index = i (local)
 					VariantMerger bvm = new VariantMerger(batchData);
-					bvm.runMerging();
+					bvm.runMerging(1); // single-threaded: batches already run in parallel
 
 					// Map local roots back to global data[] indices;
 					// restore .index to global positions.
@@ -456,10 +456,21 @@ public class VariantMerger
 
 		VariantMerger finalVM = new VariantMerger(reps);
 
-		// Because sample batches are disjoint by construction, no two
-		// representatives can share a sample — the Phase 2 same-sample
-		// check is trivially satisfied and no injection is needed.
-		// (forest.sampleSets[j] is already {rep.sample}, which is enough.)
+		// Inject accumulated sample sets from Phase 1 into Phase 2's forest.
+		// Each Phase 1 representative may stand for a group spanning many samples.
+		// Without this injection, Phase 2's canUnion would only see the single
+		// sample of the representative itself and could incorrectly merge groups
+		// that share a sample.
+		if(!Settings.ALLOW_INTRASAMPLE && finalVM.forest.sampleSets != null)
+		{
+			for(int j = 0; j < numReps; j++)
+				finalVM.forest.sampleSets[j] = new java.util.HashSet<Integer>();
+			for(int i = 0; i < n; i++)
+			{
+				int repPos = globalToRepPos[batchRoot[i]];
+				finalVM.forest.sampleSets[repPos].add(data[i].sample);
+			}
+		}
 
 		finalVM.runMerging();
 		for(int j = 0; j < numReps; j++) reps.get(j).index = repOrigIdx[j];
@@ -484,171 +495,6 @@ public class VariantMerger
 			}
 		}
 		System.out.printf("[SampleHierarchical] Total time: %.1fs%n",
-			(System.currentTimeMillis() - t0) / 1000.0);
-	}
-
-	/*
-	 * Hierarchical merging: splits variants into batches by position in the
-	 * sorted variant array (HIERARCHICAL_BATCH_SIZE variants per batch).
-	 * Prefer runSampleHierarchicalMerging() for large cohorts; use this
-	 * fallback when sample IDs are not available or batching by genomic
-	 * region is desired.
-	 * Phase 1 batches are formed by splitting the position-sorted input array into
-	 * consecutive windows of Settings.HIERARCHICAL_BATCH_SIZE variants.  Because the
-	 * data is sorted, each window covers a contiguous genomic region, so variants that
-	 * should merge almost always land in the same batch.
-	 *
-	 * Same-sample filtering (ALLOW_INTRASAMPLE=false):
-	 *   After Phase 1 each batch representative stands for many samples.  Before Phase 2
-	 *   runs, the representative's sampleSets entry in finalVM.forest is replaced with
-	 *   the full union of all samples in its batch group.  This ensures that Phase 2
-	 *   correctly rejects merges whose underlying groups share a sample.
-	 *
-	 * Known approximation (inherent to any hierarchical scheme):
-	 *   A cluster whose union-find root is not the variant closest to the batch boundary
-	 *   may miss a valid cross-batch merge if the root is outside maxDist of the
-	 *   adjacent batch's root.  In practice this affects only a small fraction of
-	 *   boundary variants and is accepted for the large speedup it enables.
-	 *
-	 * Complexity: O(batches × B·k·log k·log B  +  R·k'·log k'·log R)
-	 *   vs  O(n·k·log k·log n)  for the monolithic edge loop,
-	 *   where B = batch size, R = number of phase-2 representatives.
-	 *
-	 * Phase 1 batches are run in parallel using Settings.THREADS threads.
-	 * This method is skipped when CLIQUE_MERGE or CENTROID_MERGE is set because
-	 * those modes require global group membership during merging.
-	 */
-	void runHierarchicalMerging()
-	{
-		int batchSize = Settings.HIERARCHICAL_BATCH_SIZE;
-		int numBatches = (n + batchSize - 1) / batchSize;
-		long t0 = System.currentTimeMillis();
-		System.out.printf("[Hierarchical] %,d variants → %d batches of ≤%,d%n",
-			n, numBatches, batchSize);
-
-		// ----------------------------------------------------------------
-		// Phase 1: intra-batch merging (batches are independent → parallel)
-		// batchRoot[i] = global index in data[] of the representative for i
-		// ----------------------------------------------------------------
-		int[] batchRoot = new int[n];
-		int numThreads = Math.max(1, Settings.THREADS);
-		ExecutorService pool = Executors.newFixedThreadPool(numThreads);
-		CountDownLatch latch = new CountDownLatch(numBatches);
-
-		for(int b = 0; b < numBatches; b++)
-		{
-			final int bStart = b * batchSize;
-			final int bEnd   = Math.min(n, (b + 1) * batchSize);
-			pool.submit(() -> {
-				try
-				{
-					int len = bEnd - bStart;
-					Variant[] batchData = new Variant[len];
-					for(int i = 0; i < len; i++) batchData[i] = data[bStart + i];
-
-					// Constructor sets batchData[i].index = i (local); runMerging uses it
-					VariantMerger bvm = new VariantMerger(batchData);
-					bvm.runMerging();
-
-					// Map local roots → global indices; restore .index to global position
-					// Different batches write to non-overlapping ranges so no synchronisation needed
-					for(int i = 0; i < len; i++)
-					{
-						int localRoot = bvm.forest.find(i);
-						batchRoot[bStart + i] = bStart + localRoot;
-						batchData[i].index = bStart + i;
-					}
-				}
-				finally { latch.countDown(); }
-			});
-		}
-		try { latch.await(); } catch(InterruptedException ie) { Thread.currentThread().interrupt(); }
-		pool.shutdown();
-
-		int numReps = 0;
-		for(int i = 0; i < n; i++) if(batchRoot[i] == i) numReps++;
-		System.out.printf("[Hierarchical] Phase 1 done in %.1fs – %,d batch representatives%n",
-			(System.currentTimeMillis() - t0) / 1000.0, numReps);
-
-		// ---------------------------------------------------------------
-		// Phase 2: inter-batch merge on the batch representatives
-		// globalToRepPos[i] = position of global index i in reps list, or -1
-		// repOrigIdx[j]     = global data[] index of the j-th representative
-		// ---------------------------------------------------------------
-		int[] globalToRepPos = new int[n];
-		for(int i = 0; i < n; i++) globalToRepPos[i] = -1;
-		int[] repOrigIdx = new int[numReps];
-		ArrayList<Variant> reps = new ArrayList<>(numReps);
-
-		for(int i = 0; i < n; i++)
-		{
-			if(batchRoot[i] == i)
-			{
-				int pos = reps.size();
-				globalToRepPos[i] = pos;
-				repOrigIdx[pos]   = i;
-				reps.add(data[i]);
-			}
-		}
-
-		long tP2 = System.currentTimeMillis();
-		System.out.printf("[Hierarchical] Phase 2: merging %,d representatives%n", numReps);
-		// Constructor overwrites .index for each rep to its position in reps[]
-		VariantMerger finalVM = new VariantMerger(reps);
-
-		// ---- Fix Phase-2 same-sample filtering ----
-		// Forest(reps) initialises each rep's sampleSets entry with only its own
-		// single sample.  But a batch representative may stand for a group that
-		// already contains many samples (merged in Phase 1).  If we don't inject
-		// the full sample membership here, Phase 2 will allow merges between two
-		// representatives whose underlying batch groups share a sample — producing
-		// an output variant with duplicate genotypes from that sample.
-		//
-		// Fix: replace each single-element sampleSets[j] with the union of all
-		// samples that belong to that batch group.  batchRoot[i] already maps
-		// every original variant i to its batch-group representative (global idx),
-		// and globalToRepPos maps that global idx to the Phase-2 position j.
-		if(!Settings.ALLOW_INTRASAMPLE && finalVM.forest.sampleSets != null)
-		{
-			// Wipe the single-element sets the constructor just built
-			for(int j = 0; j < numReps; j++)
-				finalVM.forest.sampleSets[j] = new java.util.HashSet<Integer>();
-			// Accumulate the full sample membership for each batch group
-			for(int i = 0; i < n; i++)
-			{
-				int repPos = globalToRepPos[batchRoot[i]];
-				finalVM.forest.sampleSets[repPos].add(data[i].sample);
-			}
-		}
-
-		finalVM.runMerging();
-		// Restore .index for representatives back to global positions
-		for(int j = 0; j < numReps; j++) reps.get(j).index = repOrigIdx[j];
-		System.out.printf("[Hierarchical] Phase 2 done in %.1fs%n",
-			(System.currentTimeMillis() - tP2) / 1000.0);
-
-		// ---------------------------------------------------------------
-		// Phase 3: propagate final groupings back into this.forest
-		// for each original variant i:
-		//   i → batchRoot[i] (batch rep, global) → globalToRepPos → repPos in reps[]
-		//     → finalVM.forest.find(repPos) → finalRepPos → repOrigIdx[finalRepPos]
-		//     = global root → union i with that root in this.forest
-		// ---------------------------------------------------------------
-		System.out.println("[Hierarchical] Phase 3: rebuilding union-find");
-		for(int i = 0; i < n; i++)
-		{
-			int repPos      = globalToRepPos[batchRoot[i]];
-			int finalRepPos = finalVM.forest.find(repPos);
-			int finalGlobal = repOrigIdx[finalRepPos];
-			if(i != finalGlobal)
-			{
-				int rootI     = forest.find(i);
-				int rootFinal = forest.find(finalGlobal);
-				if(rootI != rootFinal)
-					forest.union(rootI, rootFinal);
-			}
-		}
-		System.out.printf("[Hierarchical] Total time: %.1fs%n",
 			(System.currentTimeMillis() - t0) / 1000.0);
 	}
 
