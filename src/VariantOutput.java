@@ -80,7 +80,17 @@ public class VariantOutput {
 				List<String>   headers = isS0 ? new ArrayList<>() : null;
 				List<VcfEntry> entries = new ArrayList<>();
 				HashSet<String> ids    = new HashSet<>();
-				Scanner input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fn))));
+				BgzipReader bgzReader = null;
+				Scanner input;
+				if(fn.endsWith(".gz"))
+				{
+					bgzReader = new BgzipReader(fn);
+					input = bgzReader.getScanner();
+				}
+				else
+				{
+					input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fn))));
+				}
 				while(input.hasNext())
 				{
 					String line = input.nextLine();
@@ -106,7 +116,14 @@ public class VariantOutput {
 					ids.add(entry.getId());
 					entries.add(entry);
 				}
-				input.close();
+				if(bgzReader != null)
+				{
+					bgzReader.close();
+				}
+				else
+				{
+					input.close();
+				}
 				return new SampleData(headers, entries);
 			}));
 		}
