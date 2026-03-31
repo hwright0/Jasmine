@@ -86,7 +86,7 @@ public class AddGenotypes {
 			FileFormatField fileFormats = futures.get(s).get();
 			for(String sampleName : fileFormats.sampleNames)
 			{
-				allSampleNamesList.add(inputFormats.size() + "_" + sampleName);
+				allSampleNamesList.add(sampleName);
 			}
 			inputFormats.add(fileFormats);
 		}
@@ -195,7 +195,7 @@ public class AddGenotypes {
 					}
 					
 					// Merge all format fields together and print the resulting VCF entry
-					VariantFormatField merged = merge(toMerge, sampleCounts, suppVec);
+					VariantFormatField merged = merge(toMerge, sampleCounts, suppVec, entry);
 					
 					// Strip SUPP_VEC and SUPP_VEC_EXT from the INFO column if --no_supp_vec
 					if(Settings.NO_SUPP_VEC)
@@ -224,7 +224,7 @@ public class AddGenotypes {
 	 * Merges the format field of multiple variants which share the same FORMAT string
 	 * Creates one variant whose set of samples is the concatenation of the inputs' samples
 	 */
-	static VariantFormatField merge(ArrayList<VariantFormatField> list, int[] sampleCounts, String suppVec)
+	static VariantFormatField merge(ArrayList<VariantFormatField> list, int[] sampleCounts, String suppVec, VcfEntry entry) throws Exception
 	{
 		int numSamples = 0;
 		for(int count : sampleCounts)
@@ -264,8 +264,7 @@ public class AddGenotypes {
 					}
 					else
 					{
-						// Fill fields with "NA" but use "./." or "0|0" for genotype,
-						// and ".,." for Number=2 fields (PE)
+						// Fill fields with defaults for absent samples
 						String val = "NA";
 						if(fieldName.equals("GT"))
 						{
@@ -277,6 +276,15 @@ public class AddGenotypes {
 							{
 								val = "./.";
 							}
+						}
+						else if(fieldName.equals("IS") || fieldName.equals("SM") || fieldName.equals("CN"))
+						{
+							val = ".";
+						}
+						else if(fieldName.equals("OT"))
+						{
+							String type = entry.getNormalizedType();
+							val = type.length() > 0 ? type : entry.getType();
 						}
 						else if(fieldName.equals("PE"))
 						{
@@ -338,18 +346,28 @@ public class AddGenotypes {
 				{
 					if(entry.hasInfoField("OLDTYPE"))
 					{
-						res.sampleFieldValues[j][i] = entry.getInfo("OLDTYPE");
+						String ot = entry.getInfo("OLDTYPE");
+						if(ot.equals("CNV"))
+						{
+							String normalized = entry.getNormalizedType();
+							res.sampleFieldValues[j][i] = normalized.length() > 0 ? normalized : ot;
+						}
+						else
+						{
+							res.sampleFieldValues[j][i] = ot;
+						}
 					}
 					else
 					{
-						String type = entry.getType();
+						String type = entry.getNormalizedType();
 						if(type.length() > 0)
 						{
 							res.sampleFieldValues[j][i] = type;
 						}
 						else
 						{
-							res.sampleFieldValues[j][i] = ".";
+							type = entry.getType();
+							res.sampleFieldValues[j][i] = type.length() > 0 ? type : ".";
 						}
 					}
 				}
