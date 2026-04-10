@@ -154,7 +154,10 @@ public class VariantInput {
 			
 		}
 		
-		System.out.println(filename + " has " + allVariants.size() + " variants");
+		if(!Settings.QUIET_INPUT_COUNTS)
+		{
+			System.out.println(filename + " has " + allVariants.size() + " variants");
+		}
 		if(bgzReader != null)
 		{
 			bgzReader.close();
