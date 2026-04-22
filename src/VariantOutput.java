@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ExecutorService;
@@ -63,75 +64,23 @@ public class VariantOutput {
 		ArrayList<String> filenames = PipelineManager.getFilesFromList(fileList);
 		int numSamples = filenames.size();
 
-		// ---- Phase 1: parallel file reads ----
-		// Each task opens one sample's VCF, parses VcfEntry objects,
-		// deduplicates IDs within that file, and returns a SampleData.
-		// The main thread submits all tasks upfront; the thread pool keeps
-		// Settings.THREADS file reads in flight simultaneously.
+		// ---- Phase 1: bounded parallel file reads ----
+		// Keep only a bounded number of sample files in memory at once to
+		// avoid retaining entry lists for all samples simultaneously.
 		int numThreads = Math.max(1, Settings.THREADS);
+		int maxInFlightSamples = Math.min(numThreads, 4);
 		ExecutorService pool = Executors.newFixedThreadPool(numThreads);
-		List<Future<SampleData>> futures = new ArrayList<>(numSamples);
+		Map<Integer, Future<SampleData>> inFlight = new HashMap<>();
+		int nextToSubmit = 0;
 
-		for(int s = 0; s < numSamples; s++)
+		while(nextToSubmit < numSamples && inFlight.size() < maxInFlightSamples)
 		{
-			final String  fn   = filenames.get(s);
-			final boolean isS0 = (s == 0);
-			futures.add(pool.submit(() -> {
-				List<String>   headers = isS0 ? new ArrayList<>() : null;
-				List<VcfEntry> entries = new ArrayList<>();
-				HashSet<String> ids    = new HashSet<>();
-				BgzipReader bgzReader = null;
-				Scanner input;
-				if(fn.endsWith(".gz"))
-				{
-					bgzReader = new BgzipReader(fn);
-					input = bgzReader.getScanner();
-				}
-				else
-				{
-					input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fn))));
-				}
-				while(input.hasNext())
-				{
-					String line = input.nextLine();
-					if(line.length() == 0) continue;
-					if(line.startsWith("#"))
-					{
-						if(isS0) headers.add(line);
-						continue;
-					}
-					VcfEntry entry = VcfEntry.fromLine(line);
-					// Deduplicate IDs within this file (same logic as original)
-					if(ids.contains(entry.getId()))
-					{
-						String oldId = entry.getId();
-						int index = 1;
-						while(true)
-						{
-							String newId = oldId + "_duplicate" + index;
-							if(!ids.contains(newId)) { entry.setId(newId); break; }
-							index++;
-						}
-					}
-					ids.add(entry.getId());
-					entries.add(entry);
-				}
-				if(bgzReader != null)
-				{
-					bgzReader.close();
-				}
-				else
-				{
-					input.close();
-				}
-				return new SampleData(headers, entries);
-			}));
+			inFlight.put(nextToSubmit, submitSampleReadTask(pool, filenames, nextToSubmit));
+			nextToSubmit++;
 		}
-		pool.shutdown();
 
 		// ---- Phase 2: sequential processing in sample order ----
-		// futures.get(s).get() blocks until file s is ready; by the time we reach
-		// sample s+1 the pool has likely already prefetched it, hiding most I/O latency.
+		// Sample order is preserved while keeping prefetch bounded.
 		VcfHeader header      = new VcfHeader();
 		boolean printedHeader = false;
 
@@ -140,7 +89,8 @@ public class VariantOutput {
 			if(s % 50000 == 0)
 				System.out.printf("[Output] Processing sample %,d / %,d%n", s, numSamples);
 
-			SampleData sd = futures.get(s).get();
+			Future<SampleData> future = inFlight.remove(s);
+			SampleData sd = future.get();
 
 			// Only sample 0 contributes header lines
 			if(s == 0 && sd.headerLines != null)
@@ -176,10 +126,94 @@ public class VariantOutput {
 			}
 
 			for(VcfEntry entry : sd.entries)
-				groups.get(entry.getGraphID()).processVariant(entry, s, out);
+			{
+				String graphID = entry.getGraphID();
+				VariantGraph vg = groups.get(graphID);
+				if(vg == null)
+				{
+					continue;
+				}
+				vg.processVariant(entry, s, out);
+				if(vg.isReleased())
+				{
+					groups.remove(graphID, vg);
+				}
+			}
+
+			// Drop references to this sample's parsed entries promptly.
+			sd.entries = null;
+			sd.headerLines = null;
+
+			while(nextToSubmit < numSamples && inFlight.size() < maxInFlightSamples)
+			{
+				inFlight.put(nextToSubmit, submitSampleReadTask(pool, filenames, nextToSubmit));
+				nextToSubmit++;
+			}
 		}
 
+		pool.shutdown();
+		groups.clear();
+
 		bgzWriter.close();
+	}
+
+	private Future<SampleData> submitSampleReadTask(ExecutorService pool, ArrayList<String> filenames, int sampleIndex)
+	{
+		final String fn = filenames.get(sampleIndex);
+		final boolean isS0 = (sampleIndex == 0);
+		return pool.submit(() -> {
+			List<String> headers = isS0 ? new ArrayList<>() : null;
+			List<VcfEntry> entries = new ArrayList<>();
+			HashSet<String> ids = new HashSet<>();
+			BgzipReader bgzReader = null;
+			Scanner input;
+			if(fn.endsWith(".gz"))
+			{
+				bgzReader = new BgzipReader(fn);
+				input = bgzReader.getScanner();
+			}
+			else
+			{
+				input = new Scanner(new BufferedInputStream(new FileInputStream(new File(fn))));
+			}
+			while(input.hasNext())
+			{
+				String line = input.nextLine();
+				if(line.length() == 0) continue;
+				if(line.startsWith("#"))
+				{
+					if(isS0) headers.add(line);
+					continue;
+				}
+				VcfEntry entry = VcfEntry.fromLine(line);
+				if(ids.contains(entry.getId()))
+				{
+					String oldId = entry.getId();
+					int index = 1;
+					while(true)
+					{
+						String newId = oldId + "_duplicate" + index;
+						if(!ids.contains(newId))
+						{
+							entry.setId(newId);
+							break;
+						}
+						index++;
+					}
+				}
+				ids.add(entry.getId());
+				entries.add(entry);
+			}
+			if(bgzReader != null)
+			{
+				bgzReader.close();
+			}
+			else
+			{
+				input.close();
+			}
+			return new SampleData(headers, entries);
+		});
 	}
 
 	// ----- dead code below (original sequential loop) retained only as reference -----
@@ -338,6 +372,12 @@ public class VariantOutput {
 		
 		// For each group, the sample ID of the variant which was last processed for it
 		int[] lastAdded;
+
+		// Number of variants in this graph that still need to be seen by output.
+		int remainingVariants;
+
+		// Whether this graph has released its internal storage.
+		boolean released;
 		
 		// The list of variant IDs in each merged variant
 		StringBuilder[] idLists;
@@ -357,12 +397,15 @@ public class VariantOutput {
 			idLists = new StringBuilder[n];
 			intraIdLists = new StringBuilder[n];
 			varToGroup = new HashMap<String, Integer>();
+			remainingVariants = 0;
+			released = false;
 			
 			// Scan through groups and map variant IDs to group numbers
 			for(int i = 0; i<n; i++)
 			{
 				lastAdded[i] = -1;
 				sizes[i] = groups[i].size();
+				remainingVariants += sizes[i];
 				consensus[i] = null;
 				idLists[i] = new StringBuilder("");
 				intraIdLists[i] = new StringBuilder("");
@@ -381,6 +424,33 @@ public class VariantOutput {
 				}
 				supportVectors[i] = new String(suppVec);
 			}
+		}
+
+		boolean isReleased()
+		{
+			return released;
+		}
+
+		void releaseMemory()
+		{
+			if(released)
+			{
+				return;
+			}
+			released = true;
+			if(varToGroup != null)
+			{
+				varToGroup.clear();
+			}
+			varToGroup = null;
+			sizes = null;
+			used = null;
+			consensus = null;
+			supportVectors = null;
+			supportCounts = null;
+			lastAdded = null;
+			idLists = null;
+			intraIdLists = null;
 		}
 		
 		/*
@@ -759,18 +829,29 @@ public class VariantOutput {
 		 */
 		void processVariant(VcfEntry entry, int sample, PrintWriter out) throws Exception
 		{
-			// This should never happen, but if the variant ID is not in the graph ignore it
-			String fullId = VariantInput.fromVcfEntry(entry, sample).id;
-			if(!varToGroup.containsKey(fullId))
+			if(released)
 			{
 				return;
 			}
+
+			// This should never happen, but if the variant ID is not in the graph ignore it
+			String fullId = VariantInput.fromVcfEntry(entry, sample).id;
+			Integer groupNumberObj = varToGroup.remove(fullId);
+			if(groupNumberObj == null)
+			{
+				return;
+			}
+			remainingVariants--;
 			
-			int groupNumber = varToGroup.get(fullId);
+			int groupNumber = groupNumberObj;
 			
 			// Don't even store the components with too little support to be output
 			if(supportCounts[groupNumber] < Settings.MIN_SUPPORT)
 			{
+				if(remainingVariants == 0)
+				{
+					releaseMemory();
+				}
 				return;
 			}
 			
@@ -804,6 +885,13 @@ public class VariantOutput {
 					out.println(consensus[groupNumber]);
 				}
 				consensus[groupNumber] = null;
+				supportVectors[groupNumber] = null;
+				idLists[groupNumber] = null;
+				intraIdLists[groupNumber] = null;
+				if(remainingVariants == 0)
+				{
+					releaseMemory();
+				}
 			}
 		}
 		
