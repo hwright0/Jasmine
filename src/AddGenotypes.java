@@ -194,25 +194,23 @@ public class AddGenotypes {
 						}
 					}
 					
-					// Merge all format fields together and print the resulting VCF entry
-					VariantFormatField merged = merge(toMerge, sampleCounts, suppVec, entry);
-					
 					// Strip SUPP_VEC and SUPP_VEC_EXT from the INFO column if --no_supp_vec
 					if(Settings.NO_SUPP_VEC)
 					{
 						entry.removeInfo("SUPP_VEC");
 						entry.removeInfo("SUPP_VEC_EXT");
 					}
-					
-					// Build the full VCF row in one StringBuilder and write it in a single call.
+
+					// Stream FORMAT+samples directly into the output row without
+					// building an intermediate String[numSamples][numFields] matrix.
 					StringBuilder rowBuf = new StringBuilder();
 					for(int i = 0; i < 8; i++)
 						rowBuf.append(entry.tabTokens[i]).append('\t');
-					merged.appendTo(rowBuf);
+					mergeDirectAppend(rowBuf, toMerge, sampleCounts, suppVec, entry);
 					out.println(rowBuf);
 					variantCount++;
 					System.out.printf("[Genotypes] Wrote variant %d (%d samples)%n",
-						variantCount, merged.numSamples());
+						variantCount, allSampleNames.length);
 				}
 			}
 		}
@@ -301,7 +299,64 @@ public class AddGenotypes {
 		return res;
 		
 	}
-	
+
+	/*
+	 * Streams FORMAT fields and all per-sample genotypes directly into rowBuf in a single
+	 * pass over samples, avoiding an intermediate String[numSamples][numFields] allocation.
+	 *
+	 * All VariantFormatField objects in list have already been through reformatVariantFormat,
+	 * so their fieldNames always equal newFieldNames in the same order — direct index access
+	 * is safe and avoids getFieldIndex() linear scans in the inner loop.
+	 */
+	static void mergeDirectAppend(StringBuilder rowBuf, ArrayList<VariantFormatField> list,
+			int[] sampleCounts, String suppVec, VcfEntry entry)
+	{
+		// FORMAT header
+		for(int i = 0; i < newFieldNames.length; i++)
+		{
+			rowBuf.append(newFieldNames[i]);
+			if(i < newFieldNames.length - 1) rowBuf.append(':');
+		}
+
+		// Precompute the absent-sample string once per variant.
+		// Fields: GT:IS:OT:DV:DR:SM:CN:BC:PE
+		// Almost all samples are absent for any given SV, so this string is reused
+		// for the vast majority of the ~490k columns.
+		String absentGT = Settings.DEFAULT_ZERO_GENOTYPE ? "0|0" : "./."; 
+		String absentOT = entry.getNormalizedType();
+		if(absentOT.length() == 0) absentOT = entry.getType();
+		if(absentOT.length() == 0) absentOT = ".";
+		// GT:IS:OT:DV:DR:SM:CN:BC:PE
+		String absentSample = absentGT + ":." + ":" + absentOT + ":.:.:.:.:.:.,.";
+
+		int listIndex = 0;
+		for(int j = 0; j < suppVec.length(); j++)
+		{
+			boolean include = suppVec.charAt(j) == '1';
+			int count = sampleCounts[j];
+			for(int k = 0; k < count; k++)
+			{
+				rowBuf.append('\t');
+				if(include)
+				{
+					// Direct index access — safe because reformatVariantFormat always
+					// produces fieldNames == newFieldNames in the same order.
+					String[] vals = list.get(listIndex).sampleFieldValues[k];
+					for(int f = 0; f < vals.length; f++)
+					{
+						if(f > 0) rowBuf.append(':');
+						rowBuf.append(vals[f] != null ? vals[f] : "NA");
+					}
+				}
+				else
+				{
+					rowBuf.append(absentSample);
+				}
+			}
+			if(include) listIndex++;
+		}
+	}
+
 	/*
 	 * Reformats a variant's format fields to match what we want
 	 */
