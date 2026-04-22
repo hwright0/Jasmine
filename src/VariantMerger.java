@@ -508,26 +508,32 @@ public class VariantMerger
 	}
 
 	/*
-	 * Get an array of all of the groups of variants
+	 * Get an array of all of the groups of variants.
+	 * Returns a compact array sized to the number of actual merged groups
+	 * (not the total variant count), so downstream data structures stay small.
 	 */
 	@SuppressWarnings("unchecked")
 	ArrayList<Variant>[] getGroups()
 	{
-		ArrayList<Variant>[] res = new ArrayList[n];
-		for(int i = 0; i<n; i++)
+		// First pass: assign a compact index to each unique root
+		int[] rootToCompact = new int[n];
+		java.util.Arrays.fill(rootToCompact, -1);
+		int numGroups = 0;
+		for(int i = 0; i < n; i++)
 		{
-			res[i] = new ArrayList<Variant>();
+			int root = forest.find(i);
+			if(rootToCompact[root] == -1)
+			{
+				rootToCompact[root] = numGroups++;
+			}
 		}
-		for(int i = 0; i<n; i++)
+		// Allocate only as many lists as there are groups
+		ArrayList<Variant>[] res = new ArrayList[numGroups];
+		for(int i = 0; i < numGroups; i++) res[i] = new ArrayList<Variant>();
+		// Second pass: place each variant into its compact group
+		for(int i = 0; i < n; i++)
 		{
-			if(forest.map[i] < 0)
-			{
-				res[i].add(data[i]);
-			}
-			else
-			{
-				res[forest.find(i)].add(data[i]);
-			}
+			res[rootToCompact[forest.find(i)]].add(data[i]);
 		}
 		return res;
 	}

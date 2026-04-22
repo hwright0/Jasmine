@@ -96,11 +96,17 @@ public class ParallelMerger {
 			while((graphID = todo.poll()) != null)
 			{
 				System.out.println("Merging graph ID: " + graphID);
-				ArrayList<Variant> variantList = allVariants.get(graphID);
+				ArrayList<Variant> variantList = allVariants.remove(graphID);
 				Collections.sort(variantList);
 				VariantMerger vm = new VariantMerger(variantList);
+				variantList = null;
 				vm.runMerging();
 				ArrayList<Variant>[] res = vm.getGroups();
+				// Free heavy merge structures before building the output graph
+				vm.data = null;
+				vm.forest = null;
+				vm.knn = null;
+				vm = null;
 				output.addGraph(graphID, res, sampleCount);
 				int merges = 0;
 				for(ArrayList<Variant> list : res)
