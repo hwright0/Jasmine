@@ -309,7 +309,7 @@ public class AddGenotypes {
 	 * is safe and avoids getFieldIndex() linear scans in the inner loop.
 	 */
 	static void mergeDirectAppend(StringBuilder rowBuf, ArrayList<VariantFormatField> list,
-			int[] sampleCounts, String suppVec, VcfEntry entry)
+			int[] sampleCounts, String suppVec, VcfEntry entry) throws Exception
 	{
 		// FORMAT header
 		for(int i = 0; i < newFieldNames.length; i++)
